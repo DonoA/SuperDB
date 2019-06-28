@@ -108,6 +108,12 @@ uint8_t * new_row(table_t * tbl)
     return row_start;
 }
 
+uint8_t * get_row(table_t * tbl, size_t row_id)
+{
+    uint8_t * row_start = tbl->rows + (tbl->row_count * row_id);
+    return row_start;
+}
+
 void set_value(table_t * tbl, uint8_t * row_offset, size_t col, uint8_t * data)
 {
     size_t offset = tbl->row_headers[col].offset;
@@ -122,6 +128,120 @@ uint8_t * get_value(table_t * tbl, uint8_t * row_offset, size_t col)
 {
     size_t offset = tbl->row_headers[col].offset;
     return row_offset + offset;
+}
+
+char * value_to_string(enum type type, uint8_t * data)
+{
+    switch(type)
+    {
+        case INT:
+        {
+            char * rtn = calloc(16, sizeof(char));
+            size_t n = sprintf(rtn, "%i", *((int32_t *) data));
+            return rtn;
+        }
+        case FLOAT:
+        {
+            char *rtn = calloc(32, sizeof(char));
+            size_t n = sprintf(rtn, "%f", *((float *) data));
+            return rtn;
+        }
+        case STRING:
+        {
+            char *rtn = calloc(255, sizeof(char));
+            strcpy(rtn, data);
+            return rtn;
+        }
+
+    }
+    assert(false);
+}
+
+char ** table_to_string(table_t * tbl)
+{
+    size_t max_elt_len[tbl->header_count];
+    char *** all_elts = calloc(tbl->row_count + 1, sizeof(char **));
+
+    for(size_t i = 0; i < tbl->header_count; i++)
+    {
+        max_elt_len[i] = strlen(tbl->row_headers[i].name);
+    }
+
+    for(size_t row_id = 0; row_id < tbl->row_count; row_id++)
+    {
+        all_elts[row_id] = calloc(tbl->header_count, sizeof(char *));
+        for(size_t col = 0; col < tbl->header_count; col++)
+        {
+            enum type type = tbl->row_headers[col].type;
+            uint8_t * data = get_row(tbl, row_id) + tbl->row_headers[col].offset;
+            all_elts[row_id][col] = value_to_string(type, data);
+            size_t n = strlen(all_elts[row_id][col]);
+            if(n > max_elt_len[col])
+            {
+                max_elt_len[col] = n;
+            }
+        }
+    }
+
+    size_t line_len = 0;
+    for (size_t col = 0; col < tbl->header_count; ++col)
+    {
+        line_len += 3 + max_elt_len[col];
+    }
+
+    // final pipe and null char
+    line_len += 2;
+
+    char ** all_lines = calloc(tbl->row_count + 1, sizeof(char *));
+
+    all_lines[0] = calloc(line_len, sizeof(char));
+    for (int col = 0; col < tbl->header_count; ++col)
+    {
+        strcat(all_lines[0], "| ");
+        strcat(all_lines[0], tbl->row_headers[col].name);
+        size_t c_size = strlen(all_lines[0]);
+        size_t val_len = strlen(tbl->row_headers[col].name);
+        for(size_t j = 0; j < (max_elt_len[col] - val_len + 1); ++j)
+        {
+            all_lines[0][c_size + j] = ' ';
+        }
+    }
+    strcat(all_lines[0], "|");
+
+    for (int i = 0; i < tbl->row_count; ++i)
+    {
+        all_lines[i + 1] = calloc(line_len, sizeof(char));
+        for (int col = 0; col < tbl->header_count; ++col)
+        {
+            strcat(all_lines[i + 1], "| ");
+            strcat(all_lines[i + 1], all_elts[i][col]);
+            size_t c_size = strlen(all_lines[i + 1]);
+            size_t val_len = strlen(all_elts[i][col]);
+            for(size_t j = 0; j < (max_elt_len[col] - val_len + 1); ++j)
+            {
+                all_lines[i + 1][c_size + j] = ' ';
+            }
+        }
+        strcat(all_lines[i + 1], "|");
+    }
+
+    return all_lines;
+}
+
+void print_table(table_t * tbl)
+{
+    char ** table_lines = table_to_string(tbl);
+
+    size_t len = strlen(table_lines[0]);
+    for (int row = 0; row < tbl->row_count + 1; ++row)
+    {
+        printf("%s\n", table_lines[row]);
+        for (int i = 0; i < len; ++i)
+        {
+            printf("-");
+        }
+        printf("\n");
+    }
 }
 
 int main(int argc, char *argv[])
@@ -144,9 +264,10 @@ int main(int argc, char *argv[])
     set_value(table, row, 0, &id);
     int age = 25;
     set_value(table, row, 1, &age);
-    char * name = "James";
+    char * name = "James Simpson";
     set_value(table, row, 2, name);
 
+    print_table(table);
     printf("Done!\n");
     return 0;
 }
