@@ -11,7 +11,7 @@
 #define MAX_LIT_SIZE 32
 
 enum type {
-    INT, FLOAT, STRING
+    TYPE_INT, TYPE_FLOAT, TYPE_STRING
 };
 
 typedef struct
@@ -61,11 +61,11 @@ size_t size_of_type(enum type type)
 {
     switch(type)
     {
-        case INT:
+        case TYPE_INT:
             return 4;
-        case FLOAT:
+        case TYPE_FLOAT:
             return 4;
-        case STRING:
+        case TYPE_STRING:
             return 255;
     }
     assert(false);
@@ -136,19 +136,19 @@ char * value_to_string(enum type type, uint8_t * data)
 {
     switch(type)
     {
-        case INT:
+        case TYPE_INT:
         {
             char * rtn = calloc(16, sizeof(char));
             size_t n = sprintf(rtn, "%i", *((int32_t *) data));
             return rtn;
         }
-        case FLOAT:
+        case TYPE_FLOAT:
         {
             char *rtn = calloc(32, sizeof(char));
             size_t n = sprintf(rtn, "%f", *((float *) data));
             return rtn;
         }
-        case STRING:
+        case TYPE_STRING:
         {
             char *rtn = calloc(255, sizeof(char));
             strcpy(rtn, data);
@@ -402,14 +402,61 @@ void print_token_list(token_list_node_t * list)
     {
         printf("%i(\"%s\") ", list->token.type, list->token.lit);
     }
+    printf("\n");
 }
 
-typedef struct {
-    uint8_t * data;
-    uint8_t type;
-} command_t;
+enum type translate_type(enum token_type type)
+{
+    switch(type)
+    {
+        case TOKEN_INT:
+            return TYPE_INT;
+        case TOKEN_FLOAT:
+            return TYPE_FLOAT;
+        case TOKEN_STRING:
+            return TYPE_STRING;
+    }
+    assert(false);
+    return 0;
+}
 
-command_t compile_code(char * string)
+void execute_table_instr(database_t * db, token_list_node_t * tokens)
+{
+    token_list_node_t * curr = tokens->next; // table name token
+    assert(curr->token.type == TOKEN_NAME);
+    char * table_name = curr->token.lit;
+
+    curr = curr->next;
+    assert(curr->token.type == TOKEN_LEFT_BRACE);
+
+    curr = curr->next;
+    token_list_node_t * token = curr;
+    // first pass to count the number of headers
+    size_t count = 0;
+    while(token->token.type != TOKEN_RIGHT_BRACE) {
+        count++;
+        while(token->token.type != TOKEN_SEMICOLON)
+        {
+            token = token->next;
+        }
+        token = token->next;
+    }
+
+    // second pass to collect values
+    row_head_t * headers = calloc(count, sizeof(row_head_t));
+    for(size_t i = 0; i < count; i++)
+    {
+        headers[i].type = translate_type(curr->token.type);
+        curr = curr->next;
+        calloc_strcpy(&headers[i].name, curr->token.lit);
+        curr = curr->next;
+        curr = curr->next;
+    }
+
+    create_table(db, table_name, headers, count);
+}
+
+void execute_code(database_t * db, char * string)
 {
     /*
      * table testTbl {
@@ -417,32 +464,26 @@ command_t compile_code(char * string)
      *   int age;
      *   string name;
      * }
-     *
      */
 
     token_list_node_t * tokens = tokenize(string);
 
     print_token_list(tokens);
+
+    if(tokens->token.type == TOKEN_TABLE)
+    {
+        execute_table_instr(db, tokens);
+        return;
+    }
 }
 
 int main(int argc, char *argv[])
 {
-    char * code = "table testTbl {\n   int id;\n   int age;\n   string name;\n };\n";
+    database_t * db = create_database("testDB");
 
-    compile_code(code);
+    execute_code(db, "table testTbl {\n   int id;\n   int age;\n   string name;\n };\n");
 
-//    database_t * db = create_database("testDB");
-//
-//    row_head_t * headers = calloc(3, sizeof(row_head_t));
-//    headers[0].type = INT;
-//    calloc_strcpy(&headers[0].name, "id");
-//    headers[1].type = INT;
-//    calloc_strcpy(&headers[1].name, "age");
-//    headers[2].type = STRING;
-//    calloc_strcpy(&headers[2].name, "name");
-//
-//    create_table(db, "testTbl", headers, 3);
-//    table_t * table = get_table(db, 0);
+    table_t * table = get_table(db, 0);
 //
 //    uint8_t * row = new_row(table);
 //    int id = 0;
@@ -452,7 +493,7 @@ int main(int argc, char *argv[])
 //    char * name = "James Simpson";
 //    set_value(table, row, 2, name);
 //
-//    print_table(table);
+    print_table(table);
     printf("Done!\n");
     return 0;
 }
