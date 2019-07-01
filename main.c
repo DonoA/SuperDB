@@ -8,6 +8,8 @@
 #define INIT_TABLES 16
 #define INIT_ROWS 16
 
+#define MAX_LIT_SIZE 32
+
 enum type {
     INT, FLOAT, STRING
 };
@@ -244,30 +246,213 @@ void print_table(table_t * tbl)
     }
 }
 
+enum token_type {
+    TOKEN_TABLE, TOKEN_INT, TOKEN_STRING, TOKEN_FLOAT, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE, TOKEN_NAME, TOKEN_SEMICOLON
+};
+
+typedef struct {
+    enum token_type type;
+    char lit[MAX_LIT_SIZE];
+} instr_token_t;
+
+typedef struct token_list_node_struct {
+    instr_token_t token;
+    struct token_list_node_struct * next;
+} token_list_node_t;
+
+bool starts_with(char * src, char * starts_with)
+{
+    size_t i = 0;
+    while(true)
+    {
+        if(starts_with[i] == '\0')
+        {
+            return true;
+        }
+
+        if(src[i] != starts_with[i])
+        {
+            return false;
+        }
+
+        if(src[i] == '\0')
+        {
+            return false;
+        }
+
+        i++;
+    }
+}
+
+void add_token(token_list_node_t ** list, instr_token_t token)
+{
+    token_list_node_t * new_node = calloc(1, sizeof(token_list_node_t));
+    new_node->token = token;
+    new_node->next = NULL;
+
+    if(*list == NULL)
+    {
+        *list = new_node;
+        return;
+    }
+    token_list_node_t * curr = *list;
+    while(curr->next != NULL)
+    {
+        curr = curr->next;
+    }
+    curr->next = new_node;
+}
+
+bool check_for_token(char * string, size_t * pos, char * token_string, enum token_type type, token_list_node_t ** tokens)
+{
+    if(starts_with(string + *pos, token_string))
+    {
+        instr_token_t token;
+        token.type = type;
+        memset(token.lit, '\0', MAX_LIT_SIZE);
+        strcpy(token.lit, token_string);
+        add_token(tokens, token);
+        *pos += strlen(token_string);
+        return true;
+    }
+    return false;
+}
+
+bool is_name_char(char c)
+{
+    if(c >= 'a' && c <= 'z')
+    {
+        return true;
+    }
+    if(c >= 'A' && c <= 'Z')
+    {
+        return true;
+    }
+    if(c >= '0' && c <= '9')
+    {
+        return true;
+    }
+    if(c == '_')
+    {
+        return true;
+    }
+    return false;
+}
+
+token_list_node_t * tokenize(char * string)
+{
+    token_list_node_t * tokens = NULL;
+    size_t pos = 0;
+    while(string[pos] != '\0')
+    {
+        // non literal tokens
+        if(check_for_token(string, &pos, "table", TOKEN_TABLE, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "int", TOKEN_INT, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "float", TOKEN_FLOAT, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "string", TOKEN_STRING, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "{", TOKEN_LEFT_BRACE, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "}", TOKEN_RIGHT_BRACE, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, ";", TOKEN_SEMICOLON, &tokens))
+        {
+            continue;
+        }
+
+        if(string[pos] == '\n' || string[pos] == ' ' || string[pos] == '\t')
+        {
+            pos++;
+            continue;
+        }
+
+        size_t i = 0;
+        instr_token_t token;
+        token.type = TOKEN_NAME;
+        memset(token.lit, '\0', MAX_LIT_SIZE);
+        while(is_name_char(string[pos]))
+        {
+            token.lit[i] = string[pos];
+            pos++;
+            i++;
+        }
+        add_token(&tokens, token);
+    }
+    return tokens;
+}
+
+void print_token_list(token_list_node_t * list)
+{
+    for(; list != NULL; list = list->next)
+    {
+        printf("%i(\"%s\") ", list->token.type, list->token.lit);
+    }
+}
+
+typedef struct {
+    uint8_t * data;
+    uint8_t type;
+} command_t;
+
+command_t compile_code(char * string)
+{
+    /*
+     * table testTbl {
+     *   int id;
+     *   int age;
+     *   string name;
+     * }
+     *
+     */
+
+    token_list_node_t * tokens = tokenize(string);
+
+    print_token_list(tokens);
+}
+
 int main(int argc, char *argv[])
 {
-    database_t * db = create_database("testDB");
+    char * code = "table testTbl {\n   int id;\n   int age;\n   string name;\n };\n";
 
-    row_head_t * headers = calloc(3, sizeof(row_head_t));
-    headers[0].type = INT;
-    calloc_strcpy(&headers[0].name, "id");
-    headers[1].type = INT;
-    calloc_strcpy(&headers[1].name, "age");
-    headers[2].type = STRING;
-    calloc_strcpy(&headers[2].name, "name");
+    compile_code(code);
 
-    create_table(db, "testTbl", headers, 3);
-    table_t * table = get_table(db, 0);
-
-    uint8_t * row = new_row(table);
-    int id = 0;
-    set_value(table, row, 0, &id);
-    int age = 25;
-    set_value(table, row, 1, &age);
-    char * name = "James Simpson";
-    set_value(table, row, 2, name);
-
-    print_table(table);
+//    database_t * db = create_database("testDB");
+//
+//    row_head_t * headers = calloc(3, sizeof(row_head_t));
+//    headers[0].type = INT;
+//    calloc_strcpy(&headers[0].name, "id");
+//    headers[1].type = INT;
+//    calloc_strcpy(&headers[1].name, "age");
+//    headers[2].type = STRING;
+//    calloc_strcpy(&headers[2].name, "name");
+//
+//    create_table(db, "testTbl", headers, 3);
+//    table_t * table = get_table(db, 0);
+//
+//    uint8_t * row = new_row(table);
+//    int id = 0;
+//    set_value(table, row, 0, &id);
+//    int age = 25;
+//    set_value(table, row, 1, &age);
+//    char * name = "James Simpson";
+//    set_value(table, row, 2, name);
+//
+//    print_table(table);
     printf("Done!\n");
     return 0;
 }
