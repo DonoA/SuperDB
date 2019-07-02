@@ -125,7 +125,7 @@ uint8_t * new_row(table_t * tbl)
 
 uint8_t * get_row(table_t * tbl, size_t row_id)
 {
-    uint8_t * row_start = tbl->rows + (tbl->row_count * row_id);
+    uint8_t * row_start = tbl->rows + (row_id * tbl->row_footprint);
     return row_start;
 }
 
@@ -319,6 +319,17 @@ void add_token(token_list_node_t ** list, instr_token_t token)
         curr = curr->next;
     }
     curr->next = new_node;
+}
+
+void free_token_list(token_list_node_t * head)
+{
+    token_list_node_t * last = head;
+    while(last != NULL)
+    {
+        head = head->next;
+        free(last);
+        last = head;
+    }
 }
 
 bool check_for_token(char * string, size_t * pos, char * token_string, enum token_type type, token_list_node_t ** tokens)
@@ -600,7 +611,7 @@ void execute_code(database_t * db, char * string)
         execute_new_instr(db, tokens);
     }
 
-//    clean_tokens(tokens);
+    free_token_list(tokens);
 }
 
 /*
@@ -625,14 +636,8 @@ int main(int argc, char *argv[])
 
     execute_code(db, "new testTbl {\n    0, 25, \"James Simpson\"\n };\n");
 
-//    uint8_t * row = new_row(table);
-//    int id = 0;
-//    set_value(table, row, 0, &id);
-//    int age = 25;
-//    set_value(table, row, 1, &age);
-//    char * name = "James Simpson";
-//    set_value(table, row, 2, name);
-//
+    execute_code(db, "new testTbl {\n    1, 8, \"Tom Sawyer\"\n };\n");
+
     table_t * table = get_table_id(db, 0);
     print_table(table);
     printf("Done!\n");
