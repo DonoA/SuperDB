@@ -97,9 +97,22 @@ void create_table(database_t *db, char *name, row_head_t *headers, size_t header
     tbl->row_space = INIT_ROWS;
 }
 
-table_t * get_table(database_t * db, size_t id)
+table_t * get_table_id(database_t * db, size_t id)
 {
     return db->tables + id;
+}
+
+table_t * get_table(database_t * db, char * name)
+{
+    for(size_t i = 0; i < db->table_count; i++)
+    {
+        if(strcmp(db->tables[i].name, name) == 0)
+        {
+            return db->tables + i;
+        }
+    }
+    assert(false);
+    return NULL;
 }
 
 uint8_t * new_row(table_t * tbl)
@@ -246,8 +259,13 @@ void print_table(table_t * tbl)
     }
 }
 
+// ====================================
+// Query lang
+// ====================================
+
 enum token_type {
-    TOKEN_TABLE, TOKEN_INT, TOKEN_STRING, TOKEN_FLOAT, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE, TOKEN_NAME, TOKEN_SEMICOLON
+    TOKEN_TABLE, TOKEN_INT, TOKEN_STRING, TOKEN_FLOAT, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE, TOKEN_NAME, TOKEN_SEMICOLON,
+    TOKEN_STRING_LIT, TOKEN_NUMBER_LIT, TOKEN_COMMA, TOKEN_DOT, TOKEN_NEW
 };
 
 typedef struct {
@@ -318,6 +336,19 @@ bool check_for_token(char * string, size_t * pos, char * token_string, enum toke
     return false;
 }
 
+bool is_number(char c)
+{
+    if(c >= '0' && c <= '9')
+    {
+        return true;
+    }
+    if(c == '.')
+    {
+        return true;
+    }
+    return false;
+}
+
 bool is_name_char(char c)
 {
     if(c >= 'a' && c <= 'z')
@@ -337,6 +368,53 @@ bool is_name_char(char c)
         return true;
     }
     return false;
+}
+
+void tokenize_string_literal(char * string, size_t * pos, token_list_node_t ** tokens)
+{
+    size_t i = 0;
+    instr_token_t token;
+    token.type = TOKEN_STRING_LIT;
+    memset(token.lit, '\0', MAX_LIT_SIZE);
+    (*pos)++;
+    while(string[*pos] != '"')
+    {
+        token.lit[i] = string[*pos];
+        (*pos)++;
+        i++;
+    }
+    add_token(tokens, token);
+    (*pos)++;
+}
+
+void tokenize_number_literal(char * string, size_t * pos, token_list_node_t ** tokens)
+{
+    size_t i = 0;
+    instr_token_t token;
+    token.type = TOKEN_NUMBER_LIT;
+    memset(token.lit, '\0', MAX_LIT_SIZE);
+    while(is_number(string[*pos]))
+    {
+        token.lit[i] = string[*pos];
+        (*pos)++;
+        i++;
+    }
+    add_token(tokens, token);
+}
+
+void tokenize_name(char * string, size_t * pos, token_list_node_t ** tokens)
+{
+    size_t i = 0;
+    instr_token_t token;
+    token.type = TOKEN_NAME;
+    memset(token.lit, '\0', MAX_LIT_SIZE);
+    while(is_name_char(string[*pos]))
+    {
+        token.lit[i] = string[*pos];
+        (*pos)++;
+        i++;
+    }
+    add_token(tokens, token);
 }
 
 token_list_node_t * tokenize(char * string)
@@ -374,6 +452,18 @@ token_list_node_t * tokenize(char * string)
         {
             continue;
         }
+        if(check_for_token(string, &pos, ",", TOKEN_COMMA, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, ".", TOKEN_DOT, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "new", TOKEN_NEW, &tokens))
+        {
+            continue;
+        }
 
         if(string[pos] == '\n' || string[pos] == ' ' || string[pos] == '\t')
         {
@@ -381,17 +471,19 @@ token_list_node_t * tokenize(char * string)
             continue;
         }
 
-        size_t i = 0;
-        instr_token_t token;
-        token.type = TOKEN_NAME;
-        memset(token.lit, '\0', MAX_LIT_SIZE);
-        while(is_name_char(string[pos]))
+        if(string[pos] == '"')
         {
-            token.lit[i] = string[pos];
-            pos++;
-            i++;
+            tokenize_string_literal(string, &pos, &tokens);
+            continue;
         }
-        add_token(&tokens, token);
+
+        if(is_number(string[pos]))
+        {
+            tokenize_number_literal(string, &pos, &tokens);
+            continue;
+        }
+
+        tokenize_name(string, &pos, &tokens);
     }
     return tokens;
 }
@@ -456,16 +548,45 @@ void execute_table_instr(database_t * db, token_list_node_t * tokens)
     create_table(db, table_name, headers, count);
 }
 
+void execute_new_instr(database_t * db, token_list_node_t * tokens)
+{
+    token_list_node_t * curr = tokens->next; // table name token
+    assert(curr->token.type == TOKEN_NAME);
+    char * table_name = curr->token.lit;
+
+    table_t * tbl = get_table(db, table_name);
+
+    curr = curr->next;
+    assert(curr->token.type == TOKEN_LEFT_BRACE);
+
+    curr = curr->next;
+    uint8_t * row = new_row(tbl);
+    for (size_t j = 0; j < tbl->header_count; ++j)
+    {
+        if(tbl->row_headers[j].type == TYPE_INT)
+        {
+            int i = atoi(curr->token.lit);
+            set_value(tbl, row, j, (uint8_t *) &i);
+        }
+        else if(tbl->row_headers[j].type == TYPE_FLOAT)
+        {
+            float f = atof(curr->token.lit);
+            set_value(tbl, row, j, (uint8_t *) &f);
+        }
+        else if(tbl->row_headers[j].type == TYPE_STRING)
+        {
+            set_value(tbl, row, j, (uint8_t *) curr->token.lit);
+        }
+        curr = curr->next;
+        if(curr->token.type == TOKEN_COMMA)
+        {
+            curr = curr->next;
+        }
+    }
+}
+
 void execute_code(database_t * db, char * string)
 {
-    /*
-     * table testTbl {
-     *   int id;
-     *   int age;
-     *   string name;
-     * }
-     */
-
     token_list_node_t * tokens = tokenize(string);
 
     print_token_list(tokens);
@@ -473,9 +594,28 @@ void execute_code(database_t * db, char * string)
     if(tokens->token.type == TOKEN_TABLE)
     {
         execute_table_instr(db, tokens);
-        return;
     }
+    else if(tokens->token.type == TOKEN_NEW)
+    {
+        execute_new_instr(db, tokens);
+    }
+
+//    clean_tokens(tokens);
 }
+
+/*
+ * table testTbl {
+ *   int id;
+ *   int age;
+ *   string name;
+ * }
+ */
+
+/*
+ * new testTbl {
+ *    0, 25, "James Simpson"
+ * };
+ */
 
 int main(int argc, char *argv[])
 {
@@ -483,8 +623,8 @@ int main(int argc, char *argv[])
 
     execute_code(db, "table testTbl {\n   int id;\n   int age;\n   string name;\n };\n");
 
-    table_t * table = get_table(db, 0);
-//
+    execute_code(db, "new testTbl {\n    0, 25, \"James Simpson\"\n };\n");
+
 //    uint8_t * row = new_row(table);
 //    int id = 0;
 //    set_value(table, row, 0, &id);
@@ -493,6 +633,7 @@ int main(int argc, char *argv[])
 //    char * name = "James Simpson";
 //    set_value(table, row, 2, name);
 //
+    table_t * table = get_table_id(db, 0);
     print_table(table);
     printf("Done!\n");
     return 0;
