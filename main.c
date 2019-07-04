@@ -123,10 +123,23 @@ uint8_t * new_row(table_t * tbl)
     return row_start;
 }
 
-uint8_t * get_row(table_t * tbl, size_t row_id)
+uint8_t * get_row_id(table_t * tbl, size_t row_id)
 {
     uint8_t * row_start = tbl->rows + (row_id * tbl->row_footprint);
     return row_start;
+}
+
+size_t get_col_id(table_t * tbl, char * name)
+{
+    for(size_t col = 0; col < tbl->header_count; col++)
+    {
+        if(strcmp(tbl->row_headers[col].name, name) == 0)
+        {
+            return col;
+        }
+    }
+    assert(false);
+    return 0;
 }
 
 void set_value(table_t * tbl, uint8_t * row_offset, size_t col, uint8_t * data)
@@ -188,7 +201,7 @@ char ** table_to_string(table_t * tbl)
         for(size_t col = 0; col < tbl->header_count; col++)
         {
             enum type type = tbl->row_headers[col].type;
-            uint8_t * data = get_row(tbl, row_id) + tbl->row_headers[col].offset;
+            uint8_t * data = get_row_id(tbl, row_id) + tbl->row_headers[col].offset;
             all_elts[row_id][col] = value_to_string(type, data);
             size_t n = strlen(all_elts[row_id][col]);
             if(n > max_elt_len[col])
@@ -248,6 +261,11 @@ void print_table(table_t * tbl)
     char ** table_lines = table_to_string(tbl);
 
     size_t len = strlen(table_lines[0]);
+    for (int i = 0; i < len; ++i)
+    {
+        printf("-");
+    }
+    printf("\n");
     for (int row = 0; row < tbl->row_count + 1; ++row)
     {
         printf("%s\n", table_lines[row]);
@@ -257,6 +275,7 @@ void print_table(table_t * tbl)
         }
         printf("\n");
     }
+    printf("\n");
 }
 
 // ====================================
@@ -265,7 +284,8 @@ void print_table(table_t * tbl)
 
 enum token_type {
     TOKEN_TABLE, TOKEN_INT, TOKEN_STRING, TOKEN_FLOAT, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE, TOKEN_NAME, TOKEN_SEMICOLON,
-    TOKEN_STRING_LIT, TOKEN_NUMBER_LIT, TOKEN_COMMA, TOKEN_DOT, TOKEN_NEW
+    TOKEN_STRING_LIT, TOKEN_NUMBER_LIT, TOKEN_COMMA, TOKEN_DOT, TOKEN_NEW, TOKEN_LEFT_PAREN, TOKEN_RIGHT_PAREN,
+    TOKEN_EQUALS, TOKEN_DOUBLE_EQUALS, TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, TOKEN_EOF
 };
 
 typedef struct {
@@ -434,6 +454,12 @@ token_list_node_t * tokenize(char * string)
     size_t pos = 0;
     while(string[pos] != '\0')
     {
+        if(string[pos] == '\n' || string[pos] == ' ' || string[pos] == '\t')
+        {
+            pos++;
+            continue;
+        }
+
         // non literal tokens
         if(check_for_token(string, &pos, "table", TOKEN_TABLE, &tokens))
         {
@@ -475,12 +501,39 @@ token_list_node_t * tokenize(char * string)
         {
             continue;
         }
-
-        if(string[pos] == '\n' || string[pos] == ' ' || string[pos] == '\t')
+        if(check_for_token(string, &pos, "(", TOKEN_LEFT_PAREN, &tokens))
         {
-            pos++;
             continue;
         }
+        if(check_for_token(string, &pos, ")", TOKEN_RIGHT_PAREN, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "==", TOKEN_DOUBLE_EQUALS, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "=", TOKEN_EQUALS, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "+", TOKEN_PLUS, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "-", TOKEN_MINUS, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "*", TOKEN_STAR, &tokens))
+        {
+            continue;
+        }
+        if(check_for_token(string, &pos, "/", TOKEN_SLASH, &tokens))
+        {
+            continue;
+        }
+
 
         if(string[pos] == '"')
         {
@@ -496,6 +549,10 @@ token_list_node_t * tokenize(char * string)
 
         tokenize_name(string, &pos, &tokens);
     }
+    instr_token_t eof_token;
+    eof_token.type = TOKEN_EOF;
+    memset(eof_token.lit, '\0', MAX_LIT_SIZE);
+    add_token(&tokens, eof_token);
     return tokens;
 }
 
@@ -523,9 +580,43 @@ enum type translate_type(enum token_type type)
     return 0;
 }
 
-void execute_table_instr(database_t * db, token_list_node_t * tokens)
+size_t count_until(token_list_node_t ** start, enum token_type to_count, enum token_type until)
 {
-    token_list_node_t * curr = tokens->next; // table name token
+    token_list_node_t * curr = (*start);
+    size_t count = 0;
+    while(curr->token.type != until) {
+        if(curr->token.type == to_count)
+        {
+            count++;
+        }
+        curr = curr->next;
+    }
+
+    *start = curr;
+    return count;
+}
+
+table_t exit_code_table(int i)
+{
+    table_t result;
+    result.header_count = 1;
+    result.row_headers = calloc(1, sizeof(row_head_t));
+    result.row_space = result.row_count = 1;
+    result.row_headers[0].type = TYPE_INT;
+    result.row_headers[0].name = "EXIT CODE";
+    result.row_headers[0].offset = 0;
+
+    result.row_footprint = size_of_type(TYPE_INT);
+    result.rows = calloc(size_of_type(TYPE_INT), 1);
+
+    set_value(&result, result.rows, 0, (uint8_t *) &i);
+
+    return result;
+}
+
+table_t execute_table_instr(database_t * db, token_list_node_t ** tokens)
+{
+    token_list_node_t * curr = (*tokens)->next; // table name token
     assert(curr->token.type == TOKEN_NAME);
     char * table_name = curr->token.lit;
 
@@ -533,17 +624,9 @@ void execute_table_instr(database_t * db, token_list_node_t * tokens)
     assert(curr->token.type == TOKEN_LEFT_BRACE);
 
     curr = curr->next;
-    token_list_node_t * token = curr;
     // first pass to count the number of headers
-    size_t count = 0;
-    while(token->token.type != TOKEN_RIGHT_BRACE) {
-        count++;
-        while(token->token.type != TOKEN_SEMICOLON)
-        {
-            token = token->next;
-        }
-        token = token->next;
-    }
+    token_list_node_t * lookahead = curr;
+    size_t count = count_until(&lookahead, TOKEN_SEMICOLON, TOKEN_RIGHT_BRACE);
 
     // second pass to collect values
     row_head_t * headers = calloc(count, sizeof(row_head_t));
@@ -556,12 +639,21 @@ void execute_table_instr(database_t * db, token_list_node_t * tokens)
         curr = curr->next;
     }
 
+    assert(curr->token.type == TOKEN_RIGHT_BRACE);
+    curr = curr->next;
+    assert(curr->token.type == TOKEN_SEMICOLON);
+    curr = curr->next;
+
     create_table(db, table_name, headers, count);
+
+    *tokens = curr;
+
+    return exit_code_table(0);
 }
 
-void execute_new_instr(database_t * db, token_list_node_t * tokens)
+table_t execute_new_instr(database_t * db, token_list_node_t ** tokens)
 {
-    token_list_node_t * curr = tokens->next; // table name token
+    token_list_node_t * curr = (*tokens)->next; // table name token
     assert(curr->token.type == TOKEN_NAME);
     char * table_name = curr->token.lit;
 
@@ -594,52 +686,174 @@ void execute_new_instr(database_t * db, token_list_node_t * tokens)
             curr = curr->next;
         }
     }
+
+    assert(curr->token.type == TOKEN_RIGHT_BRACE);
+    curr = curr->next;
+    assert(curr->token.type == TOKEN_SEMICOLON);
+    curr = curr->next;
+
+    *tokens = curr;
+
+    return exit_code_table(0);
+}
+
+table_t execute_single_table_query(database_t *db, token_list_node_t **tokens)
+{
+    token_list_node_t * curr = *tokens;
+    table_t * tbl = get_table(db, curr->token.lit);
+
+    curr = curr->next;
+    assert(curr->token.type == TOKEN_DOT);
+
+    curr = curr->next;
+    char * action = curr->token.lit;
+
+    curr = curr->next;
+    assert(curr->token.type == TOKEN_LEFT_PAREN);
+
+    curr = curr->next;
+    token_list_node_t * lookahead = curr;
+    size_t action_arg_count = count_until(&lookahead, TOKEN_COMMA, TOKEN_RIGHT_PAREN) + 1;
+
+    if(strcmp(action, "select") == 0)
+    {
+        // build return table
+        table_t result;
+        result.header_count = action_arg_count;
+        result.row_headers = calloc(action_arg_count, sizeof(row_head_t));
+        size_t * col_ids = calloc(action_arg_count, sizeof(size_t));
+
+        for(size_t i = 0; i < action_arg_count; i++)
+        {
+            assert(curr->token.type == TOKEN_NAME);
+            char * field = curr->token.lit;
+            col_ids[i] = get_col_id(tbl, field);
+
+            result.row_headers[i].type = tbl->row_headers[col_ids[i]].type;
+            result.row_headers[i].name = field;
+            result.row_headers[i].offset = 0;
+
+            curr = curr->next;
+            curr = curr->next;
+        }
+
+        result.row_footprint = update_offset_get_total(result.row_headers, action_arg_count);
+
+        result.row_space = INIT_ROWS;
+        result.row_count = 0;
+        result.rows = calloc(result.row_space, result.row_footprint);
+
+        for(size_t row_id = 0; row_id < tbl->row_count; row_id++)
+        {
+            uint8_t * source_row_offset = get_row_id(tbl, row_id);
+            uint8_t * result_row_offset = new_row(&result);
+            for(size_t i = 0; i < action_arg_count; i++)
+            {
+                uint8_t * data = get_value(tbl, source_row_offset, col_ids[i]);
+                set_value(&result, result_row_offset, i, data);
+            }
+        }
+
+        return result;
+
+    }
+
+    *tokens = curr;
+
+    return exit_code_table(1);
+}
+
+table_t execute_joined_table_query(database_t *db, token_list_node_t *tokens)
+{
+    return exit_code_table(1);
 }
 
 void execute_code(database_t * db, char * string)
 {
     token_list_node_t * tokens = tokenize(string);
 
+    token_list_node_t * curr = tokens;
     print_token_list(tokens);
 
-    if(tokens->token.type == TOKEN_TABLE)
+    while(curr->token.type != TOKEN_EOF)
     {
-        execute_table_instr(db, tokens);
+        table_t result;
+        if (curr->token.type == TOKEN_TABLE)
+        {
+            result = execute_table_instr(db, &curr);
+        }
+        else if (curr->token.type == TOKEN_NEW)
+        {
+            result = execute_new_instr(db, &curr);
+        }
+        else if (curr->token.type == TOKEN_NAME)
+        {
+            result = execute_single_table_query(db, &curr);
+        }
+        else if (curr->token.type == TOKEN_LEFT_PAREN)
+        {
+            result = execute_joined_table_query(db, &curr);
+        }
+        print_table(&result);
     }
-    else if(tokens->token.type == TOKEN_NEW)
-    {
-        execute_new_instr(db, tokens);
-    }
-
     free_token_list(tokens);
 }
 
 /*
- * table testTbl {
+ * table Person {
  *   int id;
  *   int age;
  *   string name;
- * }
+ *   int job_id;
+ * };
  */
 
 /*
- * new testTbl {
- *    0, 25, "James Simpson"
+ * table Job {
+ *   int id;
+ *   string title;
+ *   float pay;
  * };
+ */
+
+/*
+ * new Job {
+ *    0, "CEO", 35.5
+ * };
+ */
+
+/*
+ * new Person {
+ *    0, 25, "James Simpson", 0
+ * };
+ */
+
+/*
+ * Person.update(age = age + 1);
+ */
+
+/*
+ * Person.select(age, name).where(id == 0);
+ */
+
+/*
+ * (Person, Job).select(Person.name, Job.title, Job.pay).inner_join(Person.job_id == Job.id);
  */
 
 int main(int argc, char *argv[])
 {
     database_t * db = create_database("testDB");
 
-    execute_code(db, "table testTbl {\n   int id;\n   int age;\n   string name;\n };\n");
+    FILE * sql_file = fopen("/home/dallen/projects/SuperDB/test.sql", "r");
 
-    execute_code(db, "new testTbl {\n    0, 25, \"James Simpson\"\n };\n");
+    char buf[1024] = { 0 };
 
-    execute_code(db, "new testTbl {\n    1, 8, \"Tom Sawyer\"\n };\n");
+    fread(buf, sizeof(char), 1024, sql_file);
 
-    table_t * table = get_table_id(db, 0);
-    print_table(table);
+    execute_code(db, buf);
+
+    print_table(get_table_id(db, 0));
+    print_table(get_table_id(db, 1));
     printf("Done!\n");
     return 0;
 }
