@@ -355,7 +355,12 @@ table_t execute_new_instr(database_t * db, token_list_node_t ** tokens)
     return exit_code_table(0);
 }
 
-table_t execute_single_table_query(database_t *db, token_list_node_t **tokens)
+// execution consists of:
+// - an action on an expression, or some fields
+// - any number of inner joins to other tables, each with an on statement following it
+// - a selector like where/top/unique used to narrow the action set
+
+table_t execute_table_query(database_t *db, token_list_node_t **tokens)
 {
     token_list_node_t * curr = *tokens;
     table_t * tbl = get_table(db, curr->token.lit);
@@ -370,6 +375,7 @@ table_t execute_single_table_query(database_t *db, token_list_node_t **tokens)
     assert(curr->token.type == TOKEN_LEFT_PAREN);
 
     curr = curr->next;
+    token_list_node_t * action_params = curr;
     token_list_node_t * lookahead = curr;
     size_t action_arg_count = count_until(&lookahead, TOKEN_COMMA, TOKEN_RIGHT_PAREN) + 1;
 
@@ -383,16 +389,15 @@ table_t execute_single_table_query(database_t *db, token_list_node_t **tokens)
 
         for(size_t i = 0; i < action_arg_count; i++)
         {
-            assert(curr->token.type == TOKEN_NAME);
-            char * field = curr->token.lit;
+            assert(action_params->token.type == TOKEN_NAME);
+            char * field = action_params->token.lit;
             col_ids[i] = get_col_id(tbl, field);
 
             result.row_headers[i].type = tbl->row_headers[col_ids[i]].type;
             result.row_headers[i].name = field;
             result.row_headers[i].offset = 0;
 
-            curr = curr->next;
-            curr = curr->next;
+            action_params = action_params->next->next;
         }
 
         result.row_footprint = update_offset_get_total(result.row_headers, action_arg_count);
@@ -412,7 +417,12 @@ table_t execute_single_table_query(database_t *db, token_list_node_t **tokens)
             }
         }
 
+        *tokens = action_params->next;
         return result;
+    }
+
+    if(strcmp(action, "update") == 0)
+    {
 
     }
 
@@ -446,11 +456,7 @@ void execute_code(database_t * db, char * string)
         }
         else if (curr->token.type == TOKEN_NAME)
         {
-            result = execute_single_table_query(db, &curr);
-        }
-        else if (curr->token.type == TOKEN_LEFT_PAREN)
-        {
-            result = execute_joined_table_query(db, &curr);
+            result = execute_table_query(db, &curr);
         }
         print_table(&result);
     }
